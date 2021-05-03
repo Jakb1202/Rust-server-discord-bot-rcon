@@ -38,7 +38,7 @@ async def send_command(command_string, ctx, identifier):
         return await ctx.send("Command timed out! Does this command exist?")
 
     counter = 0  # try 3 times to get the response wanted if the wrong response was received (wrong identifier)
-    while json.loads(resp.data)["Identifier"] != identifier and counter < 4:
+    while ((json.loads(resp.data)["Identifier"] != identifier) or (not json.loads(resp.data)["Message"])) and counter < 4:
         resp = await get_resp(client.server_ws)
         if resp is False:
             return await ctx.send("Command timed out! Does this command exist?")
