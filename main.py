@@ -1,6 +1,7 @@
 # Standard libraries
 import asyncio
 from io import BytesIO
+from collections import deque
 import json
 import random
 import re
@@ -28,37 +29,36 @@ async def get_resp(ws, timeout=10.0):
         return resp
 
 
+async def ws_response_loop():
+    await client.wait_until_ready()
+    await asyncio.sleep(1)
+    while not client.is_closed():
+        resp = await get_resp(client.server_ws, timeout=0.25)
+        if resp is not False:
+            data = json.loads(resp.data)
+            if data["Identifier"] != 0:  # we only care about responses to commands we've given
+                client.resp_deque.appendleft(data)
+
+
 async def send_command(command_string, ctx, identifier):
     await client.server_ws.send_str(
         json.dumps({"Identifier": identifier, "Message": command_string, "Name": "DiscordBotRcon"})
     )
-
-    resp = await get_resp(client.server_ws)
-    if resp is False:
-        return await ctx.send("Command timed out! Does this command exist?")
-
-    counter = 0  # try 3 times to get the response wanted if the wrong response was received (wrong identifier)
-    while ((json.loads(resp.data)["Identifier"] != identifier) or (not json.loads(resp.data)["Message"])) and counter < 4:
-        resp = await get_resp(client.server_ws)
-        if resp is False:
-            return await ctx.send("Command timed out! Does this command exist?")
-        counter += 1
-
-    data = json.loads(resp.data)
-    for i in range(5):  # handle commands with more than 1 response string sent out, eg, save
-        resp = await get_resp(client.server_ws, timeout=0.25)
-        if resp is not False:
-            extra_data = json.loads(resp.data)
-            if extra_data["Identifier"] == data["Identifier"]:
-                data["Message"] += ("\n"+extra_data["Message"])
-
-    if not data["Message"] and data["Identifier"] == identifier:
-        await ctx.send("No message")  # basically, something went wrong
-    elif data["Identifier"] == identifier:
-        with BytesIO(str.encode(data["Message"])) as byt_f:  # send to the discord channel in a txt (avoids char limit)
-            await ctx.send("Response:", file=discord.File(fp=byt_f, filename="server_response.txt"))
+    # give the responses some time to come through
+    await asyncio.sleep(1)
+    resp_string = '\n'.join(
+        [r["Message"] for r in [c for c in client.resp_deque if c is not None] if r["Identifier"] == identifier]
+    )
+    print(resp_string)
+    print(client.resp_deque)
+    if resp_string:
+        if len(resp_string) > 1000:  # send to the discord channel in a txt (avoids char limit + looks nicer)
+            with BytesIO(str.encode(resp_string)) as byt_f:
+                await ctx.send("Response:", file=discord.File(fp=byt_f, filename="server_response.txt"))
+        else:
+            await ctx.send(f"```{resp_string}```")
     else:
-        await ctx.send("Did not receive response with correct ID")  # something went wrong
+        await ctx.send("No response! Did you use the right command?")
 
 
 @commands.has_permissions(administrator=True)  # only roles with admin perms can use this command in discord 
@@ -81,7 +81,10 @@ async def ping(ctx):
 @client.event
 async def on_ready():
     # create a websocket connection attached to the discord bot instance to be used everywhere
-    client.server_ws = await aiohttp.ClientSession().ws_connect(f"ws://{SERVER_IP}:{SERVER_PORT}/{SERVER_RCON_PASS}")
+    if not hasattr(client, 'server_ws'):
+        client.server_ws = await aiohttp.ClientSession().ws_connect(
+            f"ws://{SERVER_IP}:{SERVER_PORT}/{SERVER_RCON_PASS}"
+        )
     print("I am ready to go!")
 
 
@@ -95,6 +98,10 @@ async def on_command_error(ctx, error):
     else:
         await ctx.send(f"An unexpected error has occurred!\n{str(error)[:1000]}")
 
-
+        
+# instantiate the response queue buffer
+client.resp_deque = deque(10*[None], 30)
+# instantiate the ws_response_loop
+client.loop.create_task(ws_response_loop())
 # start the discord bot
 client.run(BOT_TOKEN)
