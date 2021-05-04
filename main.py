@@ -31,7 +31,7 @@ async def get_resp(ws, timeout=10.0):
 
 async def ws_response_loop():
     await client.wait_until_ready()
-    await asyncio.sleep(1)
+    await asyncio.sleep(1.5)
     while not client.is_closed():
         resp = await get_resp(client.server_ws, timeout=0.25)
         if resp is not False:
@@ -46,9 +46,10 @@ async def send_command(command_string, ctx, identifier):
     )
     # give the responses some time to come through
     await asyncio.sleep(1)
-    resp_string = '\n'.join(
-        [r["Message"] for r in [c for c in client.resp_deque if c is not None] if r["Identifier"] == identifier]
-    )
+    resp_list = [r["Message"] for r in [c for c in client.resp_deque if c is not None] if r["Identifier"] == identifier]
+    resp_list.reverse()
+    resp_string = '\n'.join(resp_list)
+    
     print(resp_string)
     print(client.resp_deque)
     if resp_string:
